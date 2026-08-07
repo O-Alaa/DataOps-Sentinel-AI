@@ -10,7 +10,7 @@ from sentinel.config import settings
 
 async def _http_status(name: str, url: str) -> dict:
     try:
-        async with httpx.AsyncClient(timeout=2.5) as client:
+        async with httpx.AsyncClient(timeout=3.5) as client:
             response = await client.get(url)
         ok = 200 <= response.status_code < 400
         return {
@@ -34,7 +34,7 @@ async def _tcp_status(name: str, url: str) -> dict:
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
-            timeout=2.5,
+            timeout=3.5,
         )
         writer.close()
         await writer.wait_closed()
@@ -51,20 +51,57 @@ async def _tcp_status(name: str, url: str) -> dict:
         }
 
 
+async def _llm_status() -> dict:
+    provider = settings.llm_provider.strip().lower()
+
+    if provider == "ollama":
+        return await _http_status(
+            "llm_ollama",
+            settings.ollama_base_url.rstrip("/") + "/api/tags",
+        )
+
+    if provider == "groq":
+        configured = bool(settings.groq_api_key.strip())
+        return {
+            "service": "llm_groq",
+            "status": "healthy" if configured else "unavailable",
+            "detail": "managed provider configured" if configured else "provider key missing",
+        }
+
+    return {
+        "service": f"llm_{provider or 'unknown'}",
+        "status": "unavailable",
+        "detail": f"Unsupported LLM provider: {provider}",
+    }
+
+
+async def _qdrant_status() -> dict:
+    if not settings.qdrant_url.strip():
+        return await _http_status("qdrant", "http://127.0.0.1:6333/readyz")
+
+    try:
+        from sentinel.rag.qdrant_store import create_qdrant_client
+
+        client = create_qdrant_client()
+        client.get_collections()
+        client.close()
+        return {
+            "service": "qdrant",
+            "status": "healthy",
+            "detail": "Qdrant API reachable",
+        }
+    except Exception as exc:
+        return {
+            "service": "qdrant",
+            "status": "unavailable",
+            "detail": f"{type(exc).__name__}: {exc}",
+        }
+
+
 async def dependency_health() -> dict:
     checks = await asyncio.gather(
-        _http_status(
-            "ollama",
-            settings.ollama_base_url.rstrip("/") + "/api/tags",
-        ),
-        _http_status(
-            "qdrant",
-            (
-                settings.qdrant_url.rstrip("/") + "/readyz"
-                if settings.qdrant_url
-                else "http://127.0.0.1:6333/readyz"
-            ),
-        ),
+        _llm_status(),
+        _qdrant_status(),
         _http_status(
             "data_agent",
             settings.a2a_data_agent_url.rstrip("/") + "/health",
@@ -77,8 +114,4 @@ async def dependency_health() -> dict:
     )
 
     ready = all(item["status"] == "healthy" for item in checks)
-
-    return {
-        "ready": ready,
-        "services": checks,
-    }
+    return {"ready": ready, "services": checks}
