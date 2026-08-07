@@ -39,10 +39,8 @@ def get_llm():
             api_key=settings.groq_api_key,
             temperature=0,
             max_retries=2,
-            model_kwargs={
-                "reasoning_effort": "none",
-                "reasoning_format": "hidden",
-            },
+            reasoning_effort="none",
+            reasoning_format="hidden",
         )
 
     raise ValueError(
