@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.pytest_cache/
+.streamlit/
+qdrant_storage/
+data/warehouse.duckdb
+*.log
+benchmarks/
+.DS_Store
+
+# Keep only the final production evaluation artifact
+evals/results/*
+!evals/results/phase5_latest.json

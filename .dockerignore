@@ -1,0 +1,12 @@
+.venv
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+.env
+qdrant_storage
+evals/results
+benchmarks
+.pytest_cache
+.DS_Store

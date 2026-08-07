@@ -1,0 +1,188 @@
+name: dataops-sentinel-host-ollama
+
+x-app-env: &app-env
+  SERVICE_HOST: 0.0.0.0
+  OLLAMA_BASE_URL: http://host.docker.internal:11434
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+  OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-4096}
+  EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_COLLECTION: sentinel_knowledge
+  RAG_TOP_K: ${RAG_TOP_K:-3}
+  MCP_SERVER_URL: http://mcp:8100/mcp
+  A2A_DATA_AGENT_URL: http://data-agent:8201
+  A2A_KNOWLEDGE_AGENT_URL: http://knowledge-agent:8202
+  VALIDATION_MAX_RETRIES: 1
+  SPACY_MODEL: en_core_web_sm
+  PII_SCORE_THRESHOLD: 0.35
+  WHISPER_MODEL: base
+  WHISPER_DEVICE: cpu
+  WHISPER_COMPUTE_TYPE: int8
+  WHISPER_BEAM_SIZE: 1
+  OTEL_SERVICE_NAME: dataops-sentinel-ai
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+  data-init:
+    build: .
+    command: ["python", "scripts/generate_demo_data.py"]
+    volumes:
+      - sentinel-data:/app/data
+    restart: "no"
+
+  rag-init:
+    build: .
+    command: ["python", "scripts/wait_and_ingest.py"]
+    environment: *app-env
+    depends_on:
+      qdrant:
+        condition: service_started
+      data-init:
+        condition: service_completed_successfully
+    volumes:
+      - sentinel-data:/app/data
+      - hf-cache:/root/.cache/huggingface
+    restart: "no"
+
+  llm-warmup:
+    build: .
+    command: ["python", "scripts/warmup_llm.py"]
+    environment: *app-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+
+  mcp:
+    build: .
+    command: ["python", "services/mcp_server.py"]
+    environment: *app-env
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    volumes:
+      - sentinel-data:/app/data
+    ports:
+      - "8100:8100"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1',8100),2); s.close()"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  data-agent:
+    build: .
+    command: ["python", "services/a2a_data_agent.py"]
+    environment: *app-env
+    depends_on:
+      mcp:
+        condition: service_healthy
+    ports:
+      - "8201:8201"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8201/health', timeout=2)"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  knowledge-agent:
+    build: .
+    command: ["python", "services/a2a_knowledge_agent.py"]
+    environment: *app-env
+    depends_on:
+      rag-init:
+        condition: service_completed_successfully
+    volumes:
+      - sentinel-data:/app/data
+      - hf-cache:/root/.cache/huggingface
+    ports:
+      - "8202:8202"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8202/health', timeout=2)"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      data-agent:
+        condition: service_healthy
+      knowledge-agent:
+        condition: service_healthy
+      llm-warmup:
+        condition: service_completed_successfully
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  frontend:
+    build: .
+    command:
+      [
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.address=0.0.0.0",
+        "--server.port=8501"
+      ]
+    environment:
+      API_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+volumes:
+  sentinel-data:
+  qdrant-data:
+  hf-cache:

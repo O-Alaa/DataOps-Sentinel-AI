@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install CPU-only PyTorch
+        env:
+          UV_SYSTEM_PYTHON: 1
+        run: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project dependencies
+        env:
+          UV_SYSTEM_PYTHON: 1
+        run: uv pip install -r requirements.txt
+
+      - name: Install spaCy English model
+        run: python -m spacy download en_core_web_sm
+
+      - name: Compile source
+        run: python -m compileall -q api services scripts src tests
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: ".:src"
+        run: pytest -m "not integration" -q
