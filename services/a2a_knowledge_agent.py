@@ -76,7 +76,9 @@ class KnowledgeInvestigationExecutor(AgentExecutor):
         )
 
     async def cancel(self, context, event_queue) -> None:
-        raise RuntimeError("This short read-only investigation does not support cancellation.")
+        raise RuntimeError(
+            "This short read-only investigation does not support cancellation."
+        )
 
 
 skill = AgentSkill(
@@ -99,7 +101,7 @@ agent_card = AgentCard(
             url=settings.a2a_knowledge_agent_url,
         )
     ],
-    version="0.5.0",
+    version="0.6.0",
     default_input_modes=["text/plain"],
     default_output_modes=["text/plain"],
     capabilities=AgentCapabilities(streaming=False),
@@ -117,5 +119,12 @@ routes.extend(create_agent_card_routes(agent_card))
 routes.extend(create_jsonrpc_routes(handler, "/"))
 app = Starlette(routes=routes)
 
+
 if __name__ == "__main__":
+    if settings.rag_auto_ingest:
+        from sentinel.rag.ingest import build_index
+
+        summary = build_index(recreate=settings.rag_recreate_on_start)
+        print(f"Knowledge index ready: {summary}", flush=True)
+
     uvicorn.run(app, host=settings.service_host, port=8202)
