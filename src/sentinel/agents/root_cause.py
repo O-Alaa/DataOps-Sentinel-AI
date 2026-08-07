@@ -45,6 +45,7 @@ def _fallback_report(state: IncidentState) -> dict:
     rejected = _safe_int(data.get("latest_rejected_rows"))
     previous_loaded = _safe_int(data.get("previous_loaded_rows"))
     latest_loaded = _safe_int(data.get("latest_loaded_rows"))
+    expected_loaded = _safe_int(data.get("latest_expected_rows"))
     reason = str(data.get("rejected_reason", "unknown"))
     change = data.get("loaded_rows_change_pct")
 
@@ -63,7 +64,7 @@ def _fallback_report(state: IncidentState) -> dict:
     if previous_loaded and latest_loaded and change is not None:
         impact = (
             f"Loaded-row volume changed by {change}% versus the previous run "
-            f"({previous_loaded:,} → {latest_loaded:,})."
+            f"({previous_loaded:,} -> {latest_loaded:,})."
         )
     else:
         impact = "Impact could not be fully quantified because live data evidence was unavailable."
@@ -78,15 +79,27 @@ def _fallback_report(state: IncidentState) -> dict:
     if knowledge:
         evidence_summary.append(f"Retrieved {len(knowledge)} runbook/history chunks.")
 
+    recommendations = []
+    if "employee_id" in reason:
+        recommendations.append(
+            "Inspect and repair missing employee identifiers in the employee mapping source."
+        )
+    if rejected:
+        recommendations.append(
+            f"Reprocess the {rejected:,} rejected records after the mapping fix passes quality checks."
+        )
+    if expected_loaded and latest_loaded:
+        recommendations.append(
+            f"Verify loaded rows return to the expected {expected_loaded:,} before accepting the rerun."
+        )
+    recommendations.append(
+        "Refresh the downstream Sales KPI dashboard only after row-count and quality validation pass."
+    )
+
     return {
         "root_cause": root_cause,
         "impact": impact,
-        "recommendations": [
-            "Restore unavailable evidence sources before approving remediation.",
-            "Validate the employee mapping transformation when live data evidence is available.",
-            "Reprocess rejected records only after quality checks pass.",
-            "Refresh downstream dashboards only after row-count validation.",
-        ],
+        "recommendations": recommendations,
         "evidence_summary": evidence_summary,
         "citations": list(dict.fromkeys(
             item["source"] for item in knowledge if item.get("source")
@@ -140,6 +153,72 @@ def _ground_critical_facts(generated_root_cause: str, state: IncidentState) -> s
     return f"{verified} {generated_root_cause.strip()}".strip()
 
 
+def _message_text(message) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
+def _invoke_groq_json_report(prompt: str) -> RootCauseReport:
+    """
+    Qwen 3.6 on Groq supports JSON Object Mode, not Groq's native JSON-schema
+    constrained output mode. Ask for valid JSON, then enforce our Pydantic schema
+    application-side. A bounded second attempt handles occasional schema drift.
+    """
+    schema_text = json.dumps(RootCauseReport.model_json_schema(), indent=2)
+    base_prompt = (
+        prompt
+        + "\n\nThe JSON object MUST satisfy this application schema exactly:\n"
+        + schema_text
+        + "\nReturn JSON only. Do not use Markdown fences or explanatory text."
+    )
+
+    llm = get_llm().bind(response_format={"type": "json_object"})
+    last_error: Exception | None = None
+
+    for attempt in range(2):
+        attempt_prompt = base_prompt
+        if last_error is not None:
+            attempt_prompt += (
+                "\n\nThe previous response failed application validation. "
+                f"Correct the schema error and return a complete JSON object: {last_error}"
+            )
+
+        message = llm.invoke(attempt_prompt)
+        raw_text = _message_text(message)
+
+        try:
+            parsed = json.loads(raw_text)
+            return RootCauseReport.model_validate(parsed)
+        except Exception as exc:
+            last_error = exc
+
+    assert last_error is not None
+    raise last_error
+
+
+def _invoke_report(prompt: str) -> RootCauseReport:
+    provider = settings.llm_provider.strip().lower()
+
+    if provider == "groq":
+        return _invoke_groq_json_report(prompt)
+
+    structured_llm = get_llm().with_structured_output(
+        RootCauseReport,
+        method="json_schema",
+    )
+    return structured_llm.invoke(prompt)
+
+
 def root_cause_node(state: IncidentState) -> IncidentState:
     data = state.get("data_evidence", {})
     logs = state.get("log_evidence", {})
@@ -185,12 +264,7 @@ Evidence:
 
     try:
         provider = settings.llm_provider.strip().lower()
-        structured_method = "json_schema" if provider == "ollama" else "json_mode"
-        structured_llm = get_llm().with_structured_output(
-            RootCauseReport,
-            method=structured_method,
-        )
-        report = structured_llm.invoke(prompt)
+        report = _invoke_report(prompt)
 
         allowed_sources = {
             item.get("source") for item in knowledge if item.get("source")
@@ -211,7 +285,7 @@ Evidence:
         synthesis_mode = (
             "qwen3_structured_output"
             if provider == "ollama"
-            else "groq_qwen_structured_output"
+            else "groq_qwen_json_output"
         )
         provider_label = (
             f"Ollama/{settings.ollama_model}"
