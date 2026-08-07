@@ -1,4 +1,4 @@
-# Fully Hosted Deployment (Option B)
+# Fully Hosted Deployment
 
 This profile runs without the developer laptop at runtime.
 
