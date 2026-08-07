@@ -1,0 +1,8 @@
+uvicorn[standard]
+starlette
+httpx
+pydantic-settings
+python-dotenv
+
+mcp>=2,<3
+a2a-sdk[http-server]>=1.1,<2
