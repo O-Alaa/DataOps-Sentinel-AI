@@ -1,0 +1,11 @@
+uvicorn[standard]
+starlette
+pydantic-settings
+python-dotenv
+
+qdrant-client
+fastembed
+rank-bm25
+numpy
+
+a2a-sdk[http-server]>=1.1,<2
