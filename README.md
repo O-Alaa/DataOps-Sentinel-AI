@@ -10,7 +10,7 @@ A user can report an incident in text or voice — for example:
 
 The system sanitizes the request, classifies the incident, delegates evidence collection to specialist agents, retrieves operational knowledge, synthesizes a root-cause analysis with Qwen, and deterministically validates critical facts before accepting the result.
 
-**Live hosted demo:** [dataops-sentinel-ai.streamlit.app](https://dataops-sentinel-ai.streamlit.app)
+**Live hosted demo:** [dataops-sentinel-ai.streamlit.app](https://dataops-sentinel-ai-assistant.streamlit.app/)
 
 ---
 
