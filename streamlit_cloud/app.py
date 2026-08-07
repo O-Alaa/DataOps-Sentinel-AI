@@ -221,7 +221,10 @@ with tab_investigate:
             synthesis_mode = str(result.get("synthesis_mode", ""))
             if synthesis_mode == "qwen3_structured_output":
                 synthesis_label = "QWEN3 / OLLAMA"
-            elif synthesis_mode == "groq_qwen_structured_output":
+            elif synthesis_mode in {
+                "groq_qwen_structured_output",
+                "groq_qwen_json_output",
+            }:
                 synthesis_label = "QWEN / GROQ"
             else:
                 synthesis_label = "FALLBACK"
