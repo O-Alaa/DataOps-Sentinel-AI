@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+
 from pydantic import BaseModel, Field
 
+from sentinel.config import settings
 from sentinel.llm import get_llm
 from sentinel.state import IncidentState
 
@@ -93,16 +95,12 @@ def _fallback_report(state: IncidentState) -> dict:
     }
 
 
-def _ground_critical_facts(
-    generated_root_cause: str,
-    state: IncidentState,
-) -> str:
+def _ground_critical_facts(generated_root_cause: str, state: IncidentState) -> str:
     data = state.get("data_evidence", {})
     logs = state.get("log_evidence", {})
 
     rejected_rows = _safe_int(data.get("latest_rejected_rows"))
     rejected_reason = str(data.get("rejected_reason", ""))
-
     normalized = generated_root_cause.lower()
     numeric = generated_root_cause.replace(",", "")
 
@@ -174,14 +172,23 @@ Rules:
 10. If a service is unavailable, explicitly avoid treating its missing evidence as proof.
 11. If validation_retry_reason is non-empty, correct the failed point using supplied evidence.
 
+Return ONLY a valid JSON object with exactly these fields:
+- root_cause: string
+- impact: string
+- recommendations: array of strings
+- evidence_summary: array of strings
+- citations: array of strings
+
 Evidence:
 {json.dumps(context, indent=2)}
 """
 
     try:
+        provider = settings.llm_provider.strip().lower()
+        structured_method = "json_schema" if provider == "ollama" else "json_mode"
         structured_llm = get_llm().with_structured_output(
             RootCauseReport,
-            method="json_schema",
+            method=structured_method,
         )
         report = structured_llm.invoke(prompt)
 
@@ -201,22 +208,34 @@ Evidence:
             state=state,
         )
 
+        synthesis_mode = (
+            "qwen3_structured_output"
+            if provider == "ollama"
+            else "groq_qwen_structured_output"
+        )
+        provider_label = (
+            f"Ollama/{settings.ollama_model}"
+            if provider == "ollama"
+            else f"Groq/{settings.groq_model}"
+        )
+
         return {
             "root_cause": grounded_root_cause,
             "impact": report.impact,
             "recommendations": report.recommendations,
             "evidence_summary": report.evidence_summary,
             "citations": safe_citations,
-            "synthesis_mode": "qwen3_structured_output",
+            "synthesis_mode": synthesis_mode,
             "agent_trace": [
-                "Root Cause Agent: Qwen3 synthesized the report and evidence invariants were verified"
+                "Root Cause Agent: "
+                f"{provider_label} synthesized the report and evidence invariants were verified"
             ],
         }
 
     except Exception as exc:
         fallback = _fallback_report(state)
         fallback["agent_trace"] = [
-            "Root Cause Agent: local LLM unavailable/invalid; used deterministic fallback "
-            f"({type(exc).__name__})"
+            "Root Cause Agent: configured LLM unavailable/invalid; used "
+            f"deterministic fallback ({type(exc).__name__})"
         ]
         return fallback
