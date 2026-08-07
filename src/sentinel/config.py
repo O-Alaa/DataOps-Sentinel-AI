@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:4b"
     ollama_num_ctx: int = 4096
     groq_api_key: str = ""
-    groq_model: str = "openai/gpt-oss-20b"
+    groq_model: str = "qwen/qwen3.6-27b"
 
     # Retrieval.
     embedding_model: str = "BAAI/bge-small-en-v1.5"
